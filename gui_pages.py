@@ -604,17 +604,16 @@ class App:
         if raw:
             # Parse BASIS 2 data frame:
             # A +23.9 +0.000 +00000.000 +1.024 +000.00 He [VTM/HLD/...]
+            # Device reports flow in SLPM = L/min
             parts = raw.split()
             if len(parts) >= 7 and parts[0] == 'A':
                 try:
-                    temp_c    = float(parts[1])
-                    actual    = float(parts[2])
-                    setp      = float(parts[4])
-                    valve_pct = float(parts[5])
-                    flags     = ' '.join(parts[7:]) if len(parts) > 7 else ''
+                    temp_c = float(parts[1])
+                    actual = float(parts[2])   # SLPM = L/min
+                    flags  = ' '.join(parts[7:]) if len(parts) > 7 else ''
                     status_str = (
                         f"Temp: {temp_c:.1f}\u00b0C    "
-                        f"Flow: {actual:.3f} mL/min"
+                        f"Actual: {actual:.3f} L/min"
                     )
                     if flags:
                         status_str += f"    [{flags}]"

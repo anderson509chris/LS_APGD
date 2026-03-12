@@ -5,7 +5,7 @@
 # BASIS 2 ASCII Protocol (Protocol 2):
 #   Poll device:           "A\r"          -> "A +23.8 +0.000 +00000.000 +0.000 +000.00 He\r"
 #   Set setpoint source:   "ALSS u\r"    -> unsaved digital (required before setting flow)
-#   Set flow setpoint:     "AS 100.0\r"  -> sets flow to 100.0 mL/min
+#   Set flow setpoint:     "AS 0.500\r" -> sets flow to 0.500 SLPM (500 mL/min)
 #   Stop flow:             "AS 0\r"
 #   Set active gas:        "AGS 7\r"     -> 7 = Helium
 #
@@ -75,11 +75,13 @@ def stop_flow(ser):
 
 
 def set_flow(ser, ml_per_min):
+    """Slider sends mL/min (0-1000). BASIS 2 expects SLPM (0-1.000)."""
     try:
-        flow = float(ml_per_min)
+        flow_slpm = float(ml_per_min) / 1000.0
     except (ValueError, TypeError):
-        flow = 0.0
-    _send(ser, f"AS {flow:.3f}")
+        flow_slpm = 0.0
+    flow_slpm = max(0.0, min(1.0, flow_slpm))   # clamp to device range
+    _send(ser, f"AS {flow_slpm:.3f}")
 
 
 def set_cal_gas(ser, gas_index):
