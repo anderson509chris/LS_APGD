@@ -57,7 +57,7 @@ def power_supply_off():
 def trigger_shutdown_pin():
     """Assert the hardware shutdown pin (held high briefly)."""
     GPIO.output(PIN_SHUTDOWN, 1)
-    time.sleep(0.5)
+    time.sleep(2.0)
 
 
 # ---------------------------------------------------------------------------

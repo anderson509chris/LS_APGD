@@ -458,13 +458,13 @@ class App:
 
         # Purge sequence: high flow for 100 s then low standby flow
         gas_module.set_flow(self.gas_serial, 1000)  # max purge
-        time.sleep(100)
+        time.sleep(100) 
         gas_module.set_flow(self.gas_serial, 2)     # low standby
         time.sleep(1)
 
         self.root.update_idletasks()
         hardware.trigger_shutdown_pin()
-        time.sleep(2)
+        time.sleep(0.5)
         os.system('sudo shutdown now')
 
     def _exit_program(self):
