@@ -16,7 +16,7 @@ import hardware
 import pump as pump_module
 import gas as gas_module
 import settings_manager
-from dialogs import number_pad_dialog, show_message
+from dialogs import OverlayManager, number_pad_dialog, show_message
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +86,7 @@ class App:
         self.root.geometry('853x480+0+0')
 
         apply_style()
+        self.overlay = OverlayManager(self.root)
 
         # Configure root grid to fill window
         for i in range(50):
@@ -180,7 +181,7 @@ class App:
     # -----------------------------------------------------------------------
     def _psupply_on(self):
         if self.gas_state == 'OFF':
-            show_message(self.root, 'Warning!', 'Must turn on gas first')
+            self.overlay.message("Warning!", "Must turn on gas first")
             return
         hardware.power_supply_on()
         self.power_state = "ON"
@@ -202,7 +203,7 @@ class App:
 
     def _gas_off(self):
         if self.power_state == 'ON':
-            show_message(self.root, 'Warning!', 'Must turn off power supply first')
+            self.overlay.message("Warning!", "Must turn off power supply first")
             return
         gas_module.stop_flow(self.gas_serial)
         self.gas_state = "OFF"
@@ -356,25 +357,25 @@ class App:
     # Settings dialog callbacks
     # -----------------------------------------------------------------------
     def _ask_syringe_id(self):
-        val = number_pad_dialog(self.root, title="Set ID")
+        val = self.overlay.number_pad("Set ID")
         if val:
             try:
                 self.syringe_id_var.set(float(val))
                 self._save_settings()
             except ValueError:
-                show_message(self.root, "Invalid value", "Please enter a number")
+                self.overlay.message("Invalid value", "Please enter a number")
 
     def _ask_syringe_volume(self):
-        val = number_pad_dialog(self.root, title="Set Volume")
+        val = self.overlay.number_pad("Set Volume")
         if val:
             try:
                 self.syringe_volume_var.set(float(val))
                 self._save_settings()
             except ValueError:
-                show_message(self.root, "Invalid value", "Please enter a number")
+                self.overlay.message("Invalid value", "Please enter a number")
 
     def _ask_igniter_voltage(self):
-        val = number_pad_dialog(self.root, title="Igniter Voltage")
+        val = self.overlay.number_pad("Igniter Voltage")
         if val:
             try:
                 v = int(val)
@@ -382,7 +383,7 @@ class App:
                 self.igniter_voltage_var.set(v)
                 self._save_settings()
             except ValueError:
-                show_message(self.root, "Invalid value", "Enter a number between 1500-5000")
+                self.overlay.message("Invalid value", "1500-5000")
 
     # -----------------------------------------------------------------------
     # Shutdown / exit
@@ -390,38 +391,25 @@ class App:
     def _shutdown_system(self):
         import os
 
-        # --- Status popup ---
-        ws = self.root.winfo_screenwidth()
-        hs = self.root.winfo_screenheight()
+        # Show status overlay — uses in-window frame, no Toplevel
+        blocker = tk.Frame(self.root, bg="gray30")
+        blocker.place(x=0, y=0, relwidth=1, relheight=1)
+        frame = tk.Frame(self.root, bg="gray65", bd=4, relief="ridge")
+        frame.place(relx=0.5, rely=0.5, anchor="center", width=520, height=200)
+        tk.Label(frame, text="Shutting Down...",
+                 bg="gray65", font=('Times', 24)).pack(pady=(20, 6))
+        tk.Label(frame, text="Purging gas line. Please wait.",
+                 bg="gray65", font=('Times', 17)).pack()
+        tk.Label(frame, text="Do not remove power — system will",
+                 bg="gray65", font=('Times', 17)).pack()
+        tk.Label(frame, text="turn off automatically after shutdown.",
+                 bg="gray65", font=('Times', 17)).pack()
+        blocker.lift()
+        frame.lift()
+        self.root.update()
+
         self._save_settings()
         hardware.zero_outputs()
-
-        status = tk.Toplevel(self.root)
-        status.resizable(False, False)
-        status.overrideredirect(True)
-        status.config(cursor="none")
-        w, h = 520, 200
-        status.geometry(f"{w}x{h}+{(ws//2)-(w//2)}+{(hs//2)-(h//2)}")
-        status.config(bg="gray65")
-        status.grab_set()
-
-        tk.Label(status, text="Shutting Down...",
-                 bg="gray65", font=('Times', 24)).pack(pady=(20, 6))
-        tk.Label(status, text="Purging gas line. Please wait.",
-                 bg="gray65", font=('Times', 17)).pack()
-        tk.Label(status, text="Do not remove power — system will",
-                 bg="gray65", font=('Times', 17)).pack()
-        tk.Label(status, text="turn off automatically after shutdown.",
-                 bg="gray65", font=('Times', 17)).pack()
-
-        status.focus_force()
-        status.lift()
-        self.root.update()
-        # Pump a few event cycles to ensure Wayland renders the window
-        for _ in range(10):
-            self.root.update()
-            time.sleep(0.02)
-
         hardware.power_supply_off()
         pump_module.stop_pump(self.pump_serial)
 
@@ -431,10 +419,8 @@ class App:
         gas_module.set_flow(self.gas_serial, 2)     # low standby
         time.sleep(1)
 
-        self.root.update_idletasks()
         # Drive shutdown pin HIGH and leave it — OS will reset GPIO on shutdown
         # Arduino detects rising edge, waits 20s then cuts power
-        # OS shutdown takes ~10s so power cuts cleanly after filesystem unmount
         hardware.trigger_shutdown_pin()
         os.system('sudo shutdown now')
 
@@ -470,7 +456,7 @@ class App:
 
         if self.error_count >= 20:
             self._psupply_off()
-            show_message(self.root, "COMMUNICATION ERROR", "PLEASE RESTART")
+            self.overlay.message("COMMUNICATION ERROR", "PLEASE RESTART")
             self.error_count = 0
 
         self.root.after(200, self._sensor_loop)
@@ -526,7 +512,7 @@ class App:
             if ma >= 70:
                 self._pump_stop()
                 self._psupply_off()
-                show_message(self.root, "ERROR 5-1 CALL", "509-713-3009")
+                self.overlay.message("ERROR 5-1 CALL", "509-713-3009")
             self.ma_1 = ma
             self.masensor_1_lbl.config(text=int(ma))
             self.masensor_1_home_lbl.config(text=int(ma))
@@ -541,7 +527,7 @@ class App:
             if ma >= 70:
                 self._pump_stop()
                 self._psupply_off()
-                show_message(self.root, "ERROR 5-2 CALL", "509-713-3009")
+                self.overlay.message("ERROR 5-2 CALL", "509-713-3009")
             self.ma_2 = ma
             self.masensor_2_lbl.config(text=int(ma))
             self.masensor_2_home_lbl.config(text=int(ma))
@@ -584,8 +570,7 @@ class App:
                     status_str += f"    [{data['flags']}]"
                 self.gas_sensor_lbl.config(text=status_str)
                 self.gas_sensorhome_lbl.config(text=f"{data['actual']:.3f}")
-            elif data["raw"]:
-                self.gas_sensor_lbl.config(text=data["raw"])
+            # if not ok and no valid frame yet, leave label as-is
         else:
             # Fallback: direct serial read (blocking — only if no poller)
             raw, flow_val = gas_module.read_flow_data(self.gas_serial)
@@ -931,7 +916,8 @@ class App:
         gaslbl.grid(column=0, row=2, columnspan=3)
         tk.Label(gdf, text='Status', bg='white', font=f).grid(column=0, row=4, columnspan=3)
         ttk.Separator(gdf, orient=tk.HORIZONTAL).grid(column=0, row=5, columnspan=3, sticky='EW')
-        self.gas_sensor_lbl = tk.Label(gdf, text='0', bg='white', font=("Times", 20))
+        self.gas_sensor_lbl = tk.Label(gdf, text='0', bg='white', font=("Times", 18),
+                                       width=34, anchor="center", wraplength=580)
         self.gas_sensor_lbl.grid(column=0, row=6, columnspan=3)
         gdf.grid(column=0, row=2, sticky='NSEW')
 
