@@ -1,10 +1,10 @@
 # main.py
 # LS-APGD Control Application
-# initialises hardware and serial connections,
+# Initialises hardware and serial connections,
 # then hands control to the GUI.
 #
 # Folder layout expected on the Pi:
-#   ~/LSAPGD/
+#   ~/LS_APGD/
 #       main.py
 #       hardware.py
 #       pump.py
@@ -14,7 +14,7 @@
 #       dialogs.py
 #
 # Run with:
-#   cd ~/LSAPGD
+#   cd ~/LS_APGD
 #   python3 main.py
 
 import sys
@@ -25,8 +25,9 @@ import hardware
 import pump as pump_module
 import gas as gas_module
 from gui_pages import App
-
 from hardware import SensorPoller
+from gas import GasPoller
+
 
 def show_startup_error(title, message):
     """Display a simple error dialog before the main window opens."""
@@ -92,16 +93,21 @@ def main():
         hardware.hardware_cleanup()
         sys.exit(1)
 
+    gas_poller = GasPoller(gas_serial)
+    gas_poller.start()
+
     # ------------------------------------------------------------------
     # 4. Build and run the GUI
     # ------------------------------------------------------------------
     try:
-        app = App(pump_serial=pump_serial, gas_serial=gas_serial, sensor_poller=sensor_poller)
+        app = App(pump_serial=pump_serial, gas_serial=gas_serial,
+                  sensor_poller=sensor_poller, gas_poller=gas_poller)
         app.run()
     except Exception as e:
         print(f"Unhandled application error: {e}")
     finally:
         # Ensure everything is cleaned up even if the GUI crashes
+        gas_poller.stop()
         pump_module.close_pump(pump_serial)
         gas_module.close_gas_valve(gas_serial)
         hardware.hardware_cleanup()

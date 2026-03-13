@@ -17,6 +17,7 @@
 
 import serial
 import time
+import threading
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +131,80 @@ def initialise_gas_valve(ser):
     # Confirm comms with a poll
     resp = _send_read(ser, "A")
     print(f"[gas] init poll -> {resp}")
+
+
+# ---------------------------------------------------------------------------
+# GasPoller — background thread for non-blocking gas flow readback
+# ---------------------------------------------------------------------------
+class GasPoller:
+    """
+    Polls the BASIS 2 flow controller on a background thread so the UI
+    thread is never blocked by the serial read (which can take up to 1s).
+
+    Usage:
+        poller = GasPoller(ser)
+        poller.start()
+        ...
+        data = poller.get()   # returns latest dict, never blocks
+        ...
+        poller.stop()
+
+    data dict keys:
+        raw       — full raw response string from device
+        temp_c    — float, temperature in degrees C
+        actual    — float, actual flow in L/min (SLPM)
+        setpoint  — float, setpoint in L/min (SLPM)
+        flags     — str, any status flags (VTM, HLD, etc.) or empty string
+        ok        — bool, True if last read was a valid frame
+    """
+
+    POLL_INTERVAL = 0.5   # seconds between polls — 2 Hz is plenty for display
+
+    def __init__(self, ser):
+        self._ser  = ser
+        self._data = {
+            "raw":      "",
+            "temp_c":   0.0,
+            "actual":   0.0,
+            "setpoint": 0.0,
+            "flags":    "",
+            "ok":       False,
+        }
+        self._lock   = threading.Lock()
+        self._stop   = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="GasPoller")
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def get(self):
+        """Return a shallow copy of the latest gas readings. Never blocks."""
+        with self._lock:
+            return dict(self._data)
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                raw = _send_read(self._ser, "A")
+                parsed = {"raw": raw, "temp_c": 0.0, "actual": 0.0,
+                          "setpoint": 0.0, "flags": "", "ok": False}
+                if raw:
+                    parts = raw.split()
+                    if len(parts) >= 7 and parts[0] == 'A':
+                        try:
+                            parsed["temp_c"]   = float(parts[1])
+                            parsed["actual"]   = float(parts[2])
+                            parsed["setpoint"] = float(parts[4])
+                            parsed["flags"]    = ' '.join(parts[7:]) if len(parts) > 7 else ''
+                            parsed["ok"]       = True
+                        except (ValueError, IndexError):
+                            pass
+                with self._lock:
+                    self._data.update(parsed)
+            except Exception as e:
+                print(f"[GasPoller] read error: {e}")
+
+            self._stop.wait(self.POLL_INTERVAL)

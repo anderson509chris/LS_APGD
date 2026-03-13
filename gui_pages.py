@@ -56,9 +56,10 @@ class App:
     and hardware already initialised via hardware.hardware_setup().
     """
 
-    def __init__(self, pump_serial, gas_serial, sensor_poller=None):
-        self.pump_serial = pump_serial
-        self.gas_serial  = gas_serial
+    def __init__(self, pump_serial, gas_serial, sensor_poller=None, gas_poller=None):
+        self.pump_serial  = pump_serial
+        self.gas_serial   = gas_serial
+        self.gas_poller   = gas_poller
 
         # Shared application state
         self.power_state  = "OFF"
@@ -389,48 +390,9 @@ class App:
     def _shutdown_system(self):
         import os
 
-        # --- Step 1: Confirmation dialog with OK / Cancel ---
-        confirmed = {"value": False}
-
-        confirm = tk.Toplevel(self.root)
-        confirm.resizable(False, False)
-        confirm.overrideredirect(True)
-        confirm.config(cursor="none")
-        w, h = 520, 220
+        # --- Status popup ---
         ws = self.root.winfo_screenwidth()
         hs = self.root.winfo_screenheight()
-        confirm.geometry(f"{w}x{h}+{(ws//2)-(w//2)}+{(hs//2)-(h//2)}")
-        confirm.config(bg="gray65")
-        confirm.grab_set()
-
-        tk.Label(confirm, text="Shutdown System?",
-                 bg="gray65", font=('Times', 22)).pack(pady=(18, 4))
-        tk.Label(confirm, text="Shutdown will take approx. 2 minutes.",
-                 bg="gray65", font=('Times', 17)).pack()
-        tk.Label(confirm, text="Press OK to begin or Cancel to abort.",
-                 bg="gray65", font=('Times', 17)).pack(pady=(4, 14))
-
-        btn_frame = tk.Frame(confirm, bg="gray65")
-        btn_frame.pack()
-
-        def do_ok():
-            confirmed["value"] = True
-            confirm.destroy()
-
-        def do_cancel():
-            confirm.destroy()
-
-        tk.Button(btn_frame, text="OK",     width=8, font=('Times', 20),
-                  command=do_ok).grid(column=0, row=0, padx=20)
-        tk.Button(btn_frame, text="Cancel", width=8, font=('Times', 20),
-                  command=do_cancel).grid(column=1, row=0, padx=20)
-
-        self.root.wait_window(confirm)
-
-        if not confirmed["value"]:
-            return  # operator cancelled — do nothing
-
-        # --- Step 2: Non-blocking status popup ---
         self._save_settings()
         hardware.zero_outputs()
 
@@ -451,20 +413,29 @@ class App:
                  bg="gray65", font=('Times', 17)).pack()
         tk.Label(status, text="turn off automatically after shutdown.",
                  bg="gray65", font=('Times', 17)).pack()
-        self.root.update_idletasks()
+
+        status.focus_force()
+        status.lift()
+        self.root.update()
+        # Pump a few event cycles to ensure Wayland renders the window
+        for _ in range(10):
+            self.root.update()
+            time.sleep(0.02)
 
         hardware.power_supply_off()
         pump_module.stop_pump(self.pump_serial)
 
         # Purge sequence: high flow for 100 s then low standby flow
         gas_module.set_flow(self.gas_serial, 1000)  # max purge
-        time.sleep(100) 
+        time.sleep(100)
         gas_module.set_flow(self.gas_serial, 2)     # low standby
         time.sleep(1)
 
         self.root.update_idletasks()
+        # Drive shutdown pin HIGH and leave it — OS will reset GPIO on shutdown
+        # Arduino detects rising edge, waits 20s then cuts power
+        # OS shutdown takes ~10s so power cuts cleanly after filesystem unmount
         hardware.trigger_shutdown_pin()
-        time.sleep(0.5)
         os.system('sudo shutdown now')
 
     def _exit_program(self):
@@ -601,30 +572,43 @@ class App:
                 pass
 
     def _update_gas_display(self):
-        raw, flow_val = gas_module.read_flow_data(self.gas_serial)
-        if raw:
-            # Parse BASIS 2 data frame:
-            # A +23.9 +0.000 +00000.000 +1.024 +000.00 He [VTM/HLD/...]
-            # Device reports flow in SLPM = L/min
-            parts = raw.split()
-            if len(parts) >= 7 and parts[0] == 'A':
-                try:
-                    temp_c = float(parts[1])
-                    actual = float(parts[2])   # SLPM = L/min
-                    flags  = ' '.join(parts[7:]) if len(parts) > 7 else ''
-                    status_str = (
-                        f"Temp: {temp_c:.1f}\u00b0C    "
-                        f"Actual: {actual:.3f} L/min"
-                    )
-                    if flags:
-                        status_str += f"    [{flags}]"
-                    self.gas_sensor_lbl.config(text=status_str)
-                except (ValueError, IndexError):
+        # Use cached poller data — never blocks the UI thread
+        if self.gas_poller:
+            data = self.gas_poller.get()
+            if data["ok"]:
+                status_str = (
+                    f"Temp: {data['temp_c']:.1f}\u00b0C    "
+                    f"Actual: {data['actual']:.3f} L/min"
+                )
+                if data["flags"]:
+                    status_str += f"    [{data['flags']}]"
+                self.gas_sensor_lbl.config(text=status_str)
+                self.gas_sensorhome_lbl.config(text=f"{data['actual']:.3f}")
+            elif data["raw"]:
+                self.gas_sensor_lbl.config(text=data["raw"])
+        else:
+            # Fallback: direct serial read (blocking — only if no poller)
+            raw, flow_val = gas_module.read_flow_data(self.gas_serial)
+            if raw:
+                parts = raw.split()
+                if len(parts) >= 7 and parts[0] == 'A':
+                    try:
+                        temp_c = float(parts[1])
+                        actual = float(parts[2])
+                        flags  = ' '.join(parts[7:]) if len(parts) > 7 else ''
+                        status_str = (
+                            f"Temp: {temp_c:.1f}\u00b0C    "
+                            f"Actual: {actual:.3f} L/min"
+                        )
+                        if flags:
+                            status_str += f"    [{flags}]"
+                        self.gas_sensor_lbl.config(text=status_str)
+                    except (ValueError, IndexError):
+                        self.gas_sensor_lbl.config(text=raw)
+                else:
                     self.gas_sensor_lbl.config(text=raw)
-            else:
-                self.gas_sensor_lbl.config(text=raw)
-        if flow_val:
-            self.gas_sensorhome_lbl.config(text=flow_val)
+            if flow_val:
+                self.gas_sensorhome_lbl.config(text=flow_val)
 
     # =======================================================================
     # Tab builders
