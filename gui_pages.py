@@ -464,6 +464,7 @@ class App:
 
         self.root.update_idletasks()
         hardware.trigger_shutdown_pin()
+        time.sleep(2)
         os.system('sudo shutdown now')
 
     def _exit_program(self):
